@@ -240,19 +240,14 @@ def fillmaps(pdbpath, objectspath, cutoff):
         prot.ncontacts = numpy.where(cm != 999)[0].size
         pickle.dump(prot, open(objectspath + filename, 'wb'))
 
-        #print prot.pdbid
-        #print prot.chainid
-        #print
         # visualize native cm
         #visualize_cm(cm)
-
-
 
 def init_wrapper(fastalist, sspath, objectspath, pdbpath, cutoff):
     pdbid_chain_dict = parselist(fastalist)     # parse fasta list to create pdbid-chain dictionary
     runStride(pdbid_chain_dict, sspath)         # execute bash script to run stride for all pdb files
     createProteinObjs(sspath, objectspath)      # extract ss info & create protein objects
-    fillmaps(pdbpath, objectspath, cutoff)                    # generate native contact maps from pdb coordinates
+    fillmaps(pdbpath, objectspath, cutoff)      # generate native contact maps from pdb coordinates
 
 def onehot():
     """Transforms the vocabulary of 20 Aminoacids to one hot vectors"""
@@ -260,12 +255,37 @@ def onehot():
     encoded = np_utils.to_categorical(vocab)
     return encoded
 
+def prepare_data_for_training(objectspath):
+    proteins = os.listdir(objectspath)
+    numfiles = len(proteins)
+    X = []
+    Y = []
+    random.shuffle(proteins)
+    for pfile in proteins:
+        # unpickle the protein object
+        protein = pickle.load(open(objectspath + pfile, 'rb'))
+        X.append(protein.sequence)
+        Y.append(protein.ss)
+
+    splitindex = int(0.75 * numfiles)
+
+    Xtrain = X[:splitindex]
+    Ytrain = Y[:splitindex]
+    Xtest = X[splitindex:]
+    Ytest = Y[splitindex:]
+
+    return Xtrain,Ytrain,Xtest,Ytest
+
+def SSclassifier():
+    pass
 
 fastalist = 'cullpdb_pc60_res1.8_R0.25_d170805_chains11385.fasta'
 sspath = 'STRIDEfiles/'
 objectspath = 'ProteinObjs/'
 pdbpath = 'PDBfiles/'
 cutoff = 9
-#init_wrapper(fastalist,sspath,objectspath,pdbpath,cutoff)
 
-fillmaps(pdbpath, objectspath, cutoff)
+#init_wrapper(fastalist,sspath,objectspath,pdbpath,cutoff)
+[Xtrain, Ytrain, Xtest, Ytest] = prepare_data_for_training(objectspath)
+print len(Xtrain),len(Ytrain)
+print len(Xtest), len(Ytest)
