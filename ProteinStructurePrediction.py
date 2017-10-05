@@ -7,14 +7,38 @@ import difflib
 import Protein
 import cPickle as pickle
 import matplotlib.pyplot as plt
-import keras
-import tensorflow
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
+from keras.layers import Embedding
+from keras.layers import wrappers
+#import tensorflow
 from keras.utils import np_utils
+
+os.environ["THEANO_FLAGS"] = "mode=FAST_RUN,device=gpu,floatX=float32"
 
 lookup = {'CYS':'C', 'ASP':'D', 'SER': 'S', 'GLN': 'Q', 'LYS': 'K',
           'ILE': 'I', 'PRO': 'P', 'THR': 'T', 'PHE': 'F', 'ASN': 'N',
           'GLY': 'G', 'HIS': 'H', 'LEU': 'L', 'ARG': 'R', 'TRP': 'W',
           'ALA': 'A', 'VAL': 'V', 'GLU': 'E', 'TYR': 'Y', 'MET': 'M'}
+
+pslookup = {'C':0,'D':1,'S':2, 'Q':3, 'K': 4, 'I':5,'P':6, 'T':7, 'F':8,
+            'N':9, 'G':10,'H':11,'L':12,'R':13,'W':14,'A':15,'V':16, 'E':17,
+            'Y':18,'M':19}
+
+sslookup = {'H':[1,0,0,0,0,0,0,0],
+            'T':[0,1,0,0,0,0,0,0],
+            'E':[0,0,1,0,0,0,0,0],
+            'G':[0,0,0,1,0,0,0,0],
+            'B':[0,0,0,0,1,0,0,0],
+            'I':[0,0,0,0,0,1,0,0],
+            'C':[0,0,0,0,0,0,1,0],
+            'b':[0,0,0,0,0,0,0,1]}
+
+VOCABSIZE = len(lookup.keys())+1
+EMBEDIM = 200
+NEPOCHS = 20
+NHIDDEN = 150
 
 random.seed(0)
 
@@ -253,7 +277,13 @@ def onehot():
     """Transforms the vocabulary of 20 Aminoacids to one hot vectors"""
     vocab = numpy.array(range(20))
     encoded = np_utils.to_categorical(vocab)
-    return encoded
+    dict  = {}
+    i = 0
+    for key in lookup.values():
+        dict[key] = encoded[i]
+        i= i+1
+    return dict
+
 
 def prepare_data_for_training(objectspath):
     proteins = os.listdir(objectspath)
@@ -261,23 +291,60 @@ def prepare_data_for_training(objectspath):
     X = []
     Y = []
     random.shuffle(proteins)
+
     for pfile in proteins:
         # unpickle the protein object
         protein = pickle.load(open(objectspath + pfile, 'rb'))
-        X.append(protein.sequence)
-        Y.append(protein.ss)
 
-    splitindex = int(0.75 * numfiles)
+        # encode every aminoacid by an integer
+        psec = protein.sequence
+        ssec = protein.ss
+        encodedpsec = []
+        encodedssec = []
+
+        for idx in range(len(psec)):
+            encodedpsec.append(pslookup.get(psec[idx],20))
+            encodedssec.append(sslookup[ssec[idx]])
+
+        X.append(encodedpsec)
+        Y.append(encodedssec)
+
+    # assert equal length by zeropadding
+    maxsseqlen = len(max(X, key=len))
+    for i in range(len(X)):
+        l = len(X[i])
+        Y[i].extend([[0, 0, 0, 0, 0, 0, 0, 0]] * (maxsseqlen - l))
+        X[i].extend([-1] * (maxsseqlen - l))
+
+    X = numpy.array(X)
+    Y = numpy.array(Y)
+
+    # split into training and test set
+    splitindex = int(0.8 * numfiles)
 
     Xtrain = X[:splitindex]
     Ytrain = Y[:splitindex]
     Xtest = X[splitindex:]
     Ytest = Y[splitindex:]
 
+
     return Xtrain,Ytrain,Xtest,Ytest
 
 def SSclassifier():
-    pass
+    embeddinglayer = Embedding(VOCABSIZE, EMBEDIM)
+    lstmlayer = LSTM(NHIDDEN, return_sequences=True)
+    timedislayer = wrappers.TimeDistributed(Dense(8, activation='softmax'))
+
+    model = Sequential()
+    model.add(embeddinglayer)
+    model.add(lstmlayer)
+    model.add(timedislayer)
+
+    outputs = timedislayer.output_shape
+
+    model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=['accuracy'])
+    model.fit(Xtrain, Ytrain, nb_epoch=NEPOCHS, batch_size=1, verbose=2, validation_data=(Xtest,Ytest))
+
 
 fastalist = 'cullpdb_pc60_res1.8_R0.25_d170805_chains11385.fasta'
 sspath = 'STRIDEfiles/'
@@ -287,5 +354,5 @@ cutoff = 9
 
 #init_wrapper(fastalist,sspath,objectspath,pdbpath,cutoff)
 [Xtrain, Ytrain, Xtest, Ytest] = prepare_data_for_training(objectspath)
-print len(Xtrain),len(Ytrain)
-print len(Xtest), len(Ytest)
+
+SSclassifier()
