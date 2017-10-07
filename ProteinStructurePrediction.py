@@ -8,10 +8,14 @@ import Protein
 import cPickle as pickle
 import matplotlib.pyplot as plt
 from keras.models import Sequential
+from keras.models import load_model
 from keras.layers import Dense
 from keras.layers import LSTM
 from keras.layers import Embedding
 from keras.layers import wrappers
+from keras.callbacks import EarlyStopping
+from keras.callbacks import ModelCheckpoint
+from keras import optimizers
 #import tensorflow
 from keras.utils import np_utils
 
@@ -35,10 +39,16 @@ sslookup = {'H':[1,0,0,0,0,0,0,0],
             'C':[0,0,0,0,0,0,1,0],
             'b':[0,0,0,0,0,0,0,1]}
 
+callback = [
+    EarlyStopping(monitor='val_loss', patience=3, verbose=2)
+]
+
 VOCABSIZE = len(lookup.keys())+1
 EMBEDIM = 200
-NEPOCHS = 20
-NHIDDEN = 150
+NEPOCHS = 50
+NHIDDEN = 100
+LR = 0.0005
+BATCHSIZE = 128
 
 random.seed(0)
 
@@ -284,13 +294,11 @@ def onehot():
         i= i+1
     return dict
 
-
 def prepare_data_for_training(objectspath):
     proteins = os.listdir(objectspath)
     numfiles = len(proteins)
     X = []
     Y = []
-    random.shuffle(proteins)
 
     for pfile in proteins:
         # unpickle the protein object
@@ -327,24 +335,51 @@ def prepare_data_for_training(objectspath):
     Xtest = X[splitindex:]
     Ytest = Y[splitindex:]
 
+    dataset = [Xtrain,Ytrain,Xtest,Ytest]
+    pickle.dump(dataset, open('dataset', 'wb'))
 
-    return Xtrain,Ytrain,Xtest,Ytest
 
 def SSclassifier():
+    dataset = pickle.load(open('dataset', 'rb'))
+    Xtrain = dataset[0]
+    Ytrain = dataset[1]
+    Xtest = dataset[2]
+    Ytest = dataset[3]
+
     embeddinglayer = Embedding(VOCABSIZE, EMBEDIM)
     lstmlayer = LSTM(NHIDDEN, return_sequences=True)
-    timedislayer = wrappers.TimeDistributed(Dense(8, activation='softmax'))
+    densehidden = wrappers.TimeDistributed(Dense(100))
+    outputlayer = wrappers.TimeDistributed(Dense(8, activation='softmax'))
 
     model = Sequential()
     model.add(embeddinglayer)
     model.add(lstmlayer)
-    model.add(timedislayer)
+    model.add(densehidden)
+    model.add(outputlayer)
 
-    outputs = timedislayer.output_shape
+    sgd = optimizers.SGD(lr=LR, momentum=0.0, decay=0.0, nesterov=False)
+    adam = optimizers.Adam(lr=LR, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
+    opt = adam
+    outputs = outputlayer.output_shape
 
-    model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=['accuracy'])
-    model.fit(Xtrain, Ytrain, nb_epoch=NEPOCHS, batch_size=1, verbose=2, validation_data=(Xtest,Ytest))
+    model.compile(optimizer= opt, loss='categorical_crossentropy', metrics=['categorical_accuracy'])
+    history = model.fit(Xtrain, Ytrain, nb_epoch=NEPOCHS, batch_size=BATCHSIZE, verbose=2, validation_data=(Xtest,Ytest))
 
+    # plot model metrics
+    plt.plot(history.history['categorical_accuracy'])
+    plt.plot(history.history['val_categorical_accuracy'])
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+    plt.legend(['train acc', 'test acc', 'train loss', 'test loss'], loc='upper left')
+    plt.show()
+
+    # save trained model to a file
+    model.save('SSclassifier.h5')
+    # retrieve model code
+    #model = load_model('SSclassifier.h5')
+
+def ContactPredictor():
+    pass
 
 fastalist = 'cullpdb_pc60_res1.8_R0.25_d170805_chains11385.fasta'
 sspath = 'STRIDEfiles/'
@@ -353,6 +388,6 @@ pdbpath = 'PDBfiles/'
 cutoff = 9
 
 #init_wrapper(fastalist,sspath,objectspath,pdbpath,cutoff)
-[Xtrain, Ytrain, Xtest, Ytest] = prepare_data_for_training(objectspath)
+#prepare_data_for_training(objectspath)
 
 SSclassifier()
