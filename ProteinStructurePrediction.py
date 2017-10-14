@@ -13,11 +13,14 @@ from keras.layers import Dense
 from keras.layers import LSTM
 from keras.layers import Embedding
 from keras.layers import wrappers
+from keras.layers import Bidirectional
 from keras.callbacks import EarlyStopping
 from keras.callbacks import ModelCheckpoint
 from keras import optimizers
+from sklearn.utils import shuffle
 #import tensorflow
 from keras.utils import np_utils
+from keras.layers.normalization import BatchNormalization
 
 os.environ["THEANO_FLAGS"] = "mode=FAST_RUN,device=gpu,floatX=float32"
 
@@ -26,9 +29,9 @@ lookup = {'CYS':'C', 'ASP':'D', 'SER': 'S', 'GLN': 'Q', 'LYS': 'K',
           'GLY': 'G', 'HIS': 'H', 'LEU': 'L', 'ARG': 'R', 'TRP': 'W',
           'ALA': 'A', 'VAL': 'V', 'GLU': 'E', 'TYR': 'Y', 'MET': 'M'}
 
-pslookup = {'C':0,'D':1,'S':2, 'Q':3, 'K': 4, 'I':5,'P':6, 'T':7, 'F':8,
+pslookup = {'D':1,'S':2, 'Q':3, 'K': 4, 'I':5,'P':6, 'T':7, 'F':8,
             'N':9, 'G':10,'H':11,'L':12,'R':13,'W':14,'A':15,'V':16, 'E':17,
-            'Y':18,'M':19}
+            'Y':18,'M':19, 'C':20}
 
 sslookup = {'H':[1,0,0,0,0,0,0,0],
             'T':[0,1,0,0,0,0,0,0],
@@ -44,14 +47,14 @@ callback = [
 ]
 
 VOCABSIZE = len(lookup.keys())+1
-EMBEDIM = 200
-NEPOCHS = 50
-NHIDDEN = 100
-LR = 0.0005
-BATCHSIZE = 128
+EMBEDIM = 100
+NEPOCHS = 10
+NHIDDEN = 300
+LR = 0.05
+BATCHSIZE = 32
+SEED = 0
 
-random.seed(0)
-
+random.seed(SEED)
 
 def visualize_cm(contact_map):
     # plots the given contact map
@@ -282,6 +285,7 @@ def init_wrapper(fastalist, sspath, objectspath, pdbpath, cutoff):
     runStride(pdbid_chain_dict, sspath)         # execute bash script to run stride for all pdb files
     createProteinObjs(sspath, objectspath)      # extract ss info & create protein objects
     fillmaps(pdbpath, objectspath, cutoff)      # generate native contact maps from pdb coordinates
+    prepare_data_for_training(objectspath)      # prepare dataset for training
 
 def onehot():
     """Transforms the vocabulary of 20 Aminoacids to one hot vectors"""
@@ -296,7 +300,6 @@ def onehot():
 
 def prepare_data_for_training(objectspath):
     proteins = os.listdir(objectspath)
-    numfiles = len(proteins)
     X = []
     Y = []
 
@@ -311,7 +314,7 @@ def prepare_data_for_training(objectspath):
         encodedssec = []
 
         for idx in range(len(psec)):
-            encodedpsec.append(pslookup.get(psec[idx],20))
+            encodedpsec.append(pslookup.get(psec[idx],0))
             encodedssec.append(sslookup[ssec[idx]])
 
         X.append(encodedpsec)
@@ -322,72 +325,128 @@ def prepare_data_for_training(objectspath):
     for i in range(len(X)):
         l = len(X[i])
         Y[i].extend([[0, 0, 0, 0, 0, 0, 0, 0]] * (maxsseqlen - l))
-        X[i].extend([-1] * (maxsseqlen - l))
+        X[i].extend([0] * (maxsseqlen - l))
 
     X = numpy.array(X)
     Y = numpy.array(Y)
 
-    # split into training and test set
-    splitindex = int(0.8 * numfiles)
+    dataset = [X,Y]
+    pickle.dump(dataset, open('dataset', 'wb'))
 
+def prepareCB513(cb513path):
+    # prepares the CB513 dataset for validation of the SSclassifier model
+    cb513files = os.listdir(cb513path)
+    data = []
+    labels = []
+
+    for filename in cb513files:
+        fi = open(cb513path + filename, 'r')
+        content = fi.read()
+        content = content.split('\n')
+        fi.close()
+
+        residuesequence = content[0]
+        stridesequence = content[3]
+        residuesequence = residuesequence.replace(',','')
+        stridesequence = stridesequence.replace(',','')
+        residuesequence = residuesequence[4:]
+        stridesequence = stridesequence[7:]
+
+
+        if (len(residuesequence) == len(stridesequence))== False:
+            print len(residuesequence), len(stridesequence)
+            continue
+
+        # encode residues and secondary structure information as integers
+        sequence = []
+        ssinfo = []
+        for index in range(len(residuesequence)):
+            residue = residuesequence[index]
+            ss = stridesequence[index]
+            sequence.append(pslookup.get(residue,0))
+            ssinfo.append(sslookup.get(ss,sslookup['C']))
+
+        data.append(sequence)
+        labels.append(ssinfo)
+
+    # assert equal length by zeropadding
+    maxseqlen = len(max(data, key=len))
+    for i in range(len(data)):
+        l = len(data[i])
+        labels[i].extend([[0, 0, 0, 0, 0, 0, 0, 0]] * (maxseqlen - l))
+        data[i].extend([0] * (maxseqlen - l))
+
+    #data = numpy.array(data)
+    #labels = numpy.array(labels)
+
+    return [data,labels]
+
+def SSclassifier():
+    dataset = pickle.load(open('dataset', 'rb'))
+    X = dataset[0][:]
+    Y = dataset[1][:]
+
+    # shuffle data and labels in a consistent way
+    X, Y = shuffle(X, Y, random_state = SEED)
+
+    # split into training and test set
+    splitindex = int(0.8 * len(X))
     Xtrain = X[:splitindex]
     Ytrain = Y[:splitindex]
     Xtest = X[splitindex:]
     Ytest = Y[splitindex:]
 
-    dataset = [Xtrain,Ytrain,Xtest,Ytest]
-    pickle.dump(dataset, open('dataset', 'wb'))
-
-
-def SSclassifier():
-    dataset = pickle.load(open('dataset', 'rb'))
-    Xtrain = dataset[0]
-    Ytrain = dataset[1]
-    Xtest = dataset[2]
-    Ytest = dataset[3]
-
-    embeddinglayer = Embedding(VOCABSIZE, EMBEDIM)
+    embeddinglayer = Embedding(VOCABSIZE, EMBEDIM, mask_zero = True)
     lstmlayer = LSTM(NHIDDEN, return_sequences=True)
-    densehidden = wrappers.TimeDistributed(Dense(100))
+    densehidden = wrappers.TimeDistributed(Dense(150))
     outputlayer = wrappers.TimeDistributed(Dense(8, activation='softmax'))
 
     model = Sequential()
     model.add(embeddinglayer)
-    model.add(lstmlayer)
+    model.add(Bidirectional(lstmlayer))
+    model.add(BatchNormalization())
     model.add(densehidden)
     model.add(outputlayer)
+    #model.add(Dense(100))
+    #model.add(Dense(8, activation='softmax'))
 
     sgd = optimizers.SGD(lr=LR, momentum=0.0, decay=0.0, nesterov=False)
     adam = optimizers.Adam(lr=LR, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
     opt = adam
-    outputs = outputlayer.output_shape
 
     model.compile(optimizer= opt, loss='categorical_crossentropy', metrics=['categorical_accuracy'])
     history = model.fit(Xtrain, Ytrain, nb_epoch=NEPOCHS, batch_size=BATCHSIZE, verbose=2, validation_data=(Xtest,Ytest))
 
     # plot model metrics
-    plt.plot(history.history['categorical_accuracy'])
-    plt.plot(history.history['val_categorical_accuracy'])
-    plt.plot(history.history['loss'])
-    plt.plot(history.history['val_loss'])
-    plt.legend(['train acc', 'test acc', 'train loss', 'test loss'], loc='upper left')
-    plt.show()
+    #plt.plot(history.history['categorical_accuracy'])
+    #plt.plot(history.history['val_categorical_accuracy'])
+    #plt.plot(history.history['loss'])
+    #plt.plot(history.history['val_loss'])
+    #plt.legend(['train acc', 'test acc', 'train loss', 'test loss'], loc='upper left')
+    #plt.show()
 
     # save trained model to a file
-    model.save('SSclassifier.h5')
-    # retrieve model code
-    #model = load_model('SSclassifier.h5')
+    model.save('SSclassifiermasked3.h5')
 
 def ContactPredictor():
     pass
+
+def testonCB513():
+    [data,labels]= prepareCB513(cb513path)
+    model = load_model('SSclassifiermasked2.h5')
+    scores = model.evaluate( data, labels, batch_size=1, verbose=0, sample_weight=None)
+    print("\n%s: %.2f%%" % (model.metrics_names[1], scores[1]*100))
 
 fastalist = 'cullpdb_pc60_res1.8_R0.25_d170805_chains11385.fasta'
 sspath = 'STRIDEfiles/'
 objectspath = 'ProteinObjs/'
 pdbpath = 'PDBfiles/'
+cb513path = 'CB513/'
 cutoff = 9
 
 #init_wrapper(fastalist,sspath,objectspath,pdbpath,cutoff)
-#prepare_data_for_training(objectspath)
 
 SSclassifier()
+#testonCB513()
+
+
